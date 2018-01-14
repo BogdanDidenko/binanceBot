@@ -3,11 +3,11 @@ Binance = require('binance-api-node').default;
 var mainSymb = 'ETH';
 var lastPrices = [];
 var timeout = 60000;
-var percent = 3;
+var percent = 2.7;
 var numberObservTicks = 3;
 var stack = 1;
 var telegrammBot = '483418464:AAECAbDwn2w3YAbXteneOtvuLr0E1qa-_wI';
-var chatId = '-309312456';
+var chatId = '@WhatTheSCAM';
 var reqUrl = `https://api.telegram.org/bot${telegrammBot}/sendMessage`;
 var request = require('request');
 //debugger
@@ -35,6 +35,8 @@ function req(text) {
 		console.log(err, err);
 	})
 }
+
+req('Hello');
 
 function notifi(simbols) {
 	var tamplate = "symbol <b><%S%></b>\n" +
