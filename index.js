@@ -6,10 +6,12 @@ var timeout = 60000;
 var percent = 2.7;
 var numberObservTicks = 3;
 var stack = 1;
-var telegrammBot = 'ask';
+var fs = require('fs');
+var telegrammBot =  fs.readFileSync('bot_id.txt', 'utf8');
 var chatId = '@WhatTheSCAM';
 var reqUrl = `https://api.telegram.org/bot${telegrammBot}/sendMessage`;
 var request = require('request');
+
 //debugger
 //const client = Binance()
 
