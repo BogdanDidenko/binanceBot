@@ -5,11 +5,11 @@ Filters = require('./filters');
 var mainSymb = 'ETH';
 var lastPrices = [];
 var timeout = 60000;//
-var percent = 1.8;
+var percent = 2.2;
 var numberObservTicks = 3;
 var stack = 1;
 var fs = require('fs');
-var telegrammBot =  fs.readFileSync('bot_id.txt', 'utf8');
+var telegrammBot = fs.readFileSync('bot_id.txt', 'utf8');
 var chatId = '@WhatTheSCAM';
 var reqUrl = `https://api.telegram.org/bot${telegrammBot}/sendMessage`;
 var request = require('request');
@@ -92,7 +92,7 @@ var BinanceAdapte = {
 		});
 	},
 	async getPrices() {
-		return toFloat( client.prices() );
+		return toFloat( await client.prices() );
 	},
 	async getDaylyPrice(symb) {
 		var dailyStats  = await client.dailyStats({ symbol: 'REQETH' });
