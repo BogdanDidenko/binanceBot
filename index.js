@@ -1,9 +1,11 @@
 //import Binance from 'binance-api-node'
 Binance = require('binance-api-node').default;
+Filters = require('./filters');
+
 var mainSymb = 'ETH';
 var lastPrices = [];
-var timeout = 60000;
-var percent = 2.7;
+var timeout = 60000;//
+var percent = 1.8;
 var numberObservTicks = 3;
 var stack = 1;
 var fs = require('fs');
@@ -11,6 +13,11 @@ var telegrammBot =  fs.readFileSync('bot_id.txt', 'utf8');
 var chatId = '@WhatTheSCAM';
 var reqUrl = `https://api.telegram.org/bot${telegrammBot}/sendMessage`;
 var request = require('request');
+var filtersList = [
+	Filters.currency({mainSymb}),
+	Filters.daylyPrice(),
+	Filters.priceHistory({percent, numberObservTicks})
+]
 
 //debugger
 //const client = Binance()
@@ -56,82 +63,71 @@ function notifi(simbols) {
 	req(text);
 }
 
-function priceFilster(prices) {
-	var result = {};
-	for ( var k in prices ) {
-		if( k.indexOf(mainSymb) === (k.length - mainSymb.length) ) {
-			result[k] = prices[k];
-		}
-	}
-	return result;
-}
-
-function getChanges(lastPrices) {
-	var changed = [];
-	function compareWithCurrent(last, current) {
-		var overLimit = [],
-			lastValue, currentValue;
-
-		for(var k in last) {
-			lastValue = parseFloat(last[k]);
-			currentValue = parseFloat(current[k]);
-			persent = lastValue / 100 * percent;
-			if(currentValue - lastValue  > persent) {
-				overLimit.push(k);
-			}
-		}
-
-		return overLimit;
-	}
-
-	var lastPrice, currPrice, persent, overLimit = [];
-	for(var i = 1; i < lastPrices.length; i += 1) {
-		lastPrice = lastPrices[i];
-		changed.push( compareWithCurrent(lastPrices[i -1], lastPrice) );
-	}
-	changed = changed.reduce((accum, curr)=>{
-		var res = [];
-		if(!accum) {
-			return curr;
-		}
-		for(var i = 0; i < accum.length; i += 1) {
-			if( curr.includes(accum[i]) ) {
-				res.push(accum[i]);
-			}
-		}
-
-		return res;
-	});
-
-	return changed;
-}
 
 function getClearSymbolsList(changed) {
-	return changed.map( function(el) {
-		return el.substring(0, el.length - mainSymb.length);
-	} );
+	var res = [];
+	for(var k in changed) {
+		res.push( k.substring(0, k.length - mainSymb.length) );
+	}
+	return res;
+}
+
+
+
+toFloat = (prices) => {
+	var res = {};
+	for(var k in prices) {
+		res[k] = parseFloat(prices[k]);
+	}
+
+	return res;
 }
 
 var BinanceAdapte = {
-	getBalance() {
+	async getBalance() {
 		client.balance(function(balances) {
 			console.log("balances()", balances);
 			console.log("ETH balance: ", balances.ETH.available);
 			return balances.ETH.available;
 		});
 	},
-	getPrices() {
-		return client.prices();
+	async getPrices() {
+		return toFloat( client.prices() );
+	},
+	async getDaylyPrice(symb) {
+		var dailyStats  = await client.dailyStats({ symbol: 'REQETH' });
+		return parseFloat(dailyStats.weightedAvgPrice);
+	}
+}
+
+class Rule {
+	constructor({API, ruleAction}) {
+		this.API = API;
+		this.ruleAction = ruleAction;
+	}
+
+	filter(symbolArray) {
+		return symbolArray.filter( (el)=>{
+			return this.ruleAction(el);
+		} )
 	}
 }
 
 class Manager {
-	constructor(API, communication) {
+	constructor({API, communication, filtersList}) {
 		this.API = API;
-		this.part = 0.2;
-		this.symb = mainSymb;
 		this.stack = 1;
 		this.notifi = communication;
+		this.filtersList = filtersList;
+	}
+
+	async applyFilters(prices) {
+		var filter;
+		for(var filter of this.filtersList) {
+			prices = await filter({prices: prices, manager: this});
+		}
+
+		return prices;
 	}
 
 	async tick(prices) {
@@ -144,20 +140,12 @@ class Manager {
 		if(prices instanceof Error) {
 			return
 		}
-		prices = priceFilster(prices);
-		lastPrices.push(prices);
-		if(lastPrices.length < numberObservTicks) {
-			return;
-		} else if(lastPrices.length > numberObservTicks) {
-			lastPrices.splice(0, 1);
-		}
 
-		changed = getChanges(lastPrices);
+		changed = await this.applyFilters(prices);
 		//lastPrices = prices;
-		if(changed.length === 0) {
+		if(Object.keys(changed).length === 0) {
 			return;
 		}
-
 		//this.buyProcess(changed);
 
 		clearSimbols = getClearSymbolsList(changed);
@@ -195,16 +183,24 @@ class Manager {
 	}
 }
 
-var manager = new Manager(BinanceAdapte, notifi);
+var manager = new Manager({API: BinanceAdapte, communication: notifi, filtersList});
 
 function main() {
 	manager.tick();
 }
 
 setInterval(main, timeout)
+//test();
 
 function test() {
-	var testRes = ['RDN'];
+	var manager;
+	var percent = 3;
+	var testDataTemplate = {
+		RDNETH:0.00674780,
+		QSPETH:0.00062312,
+		REQETH:0.00082954
+	};
+
 	function MockNotify(data) {
 		if( !Array.isArray(data) ) {
 			throw 'Test Mock should be a array'
@@ -224,86 +220,190 @@ function test() {
 		data.forEach((el)=>{
 			var res = {};
 			for(var k in el) {
-				res[k] = el[k] + '';
+				res[k] = el[k];
 			}
 
 			manager.tick(res);
 		});
 	}
+	var testRes;
 
-	var manager = new Manager(BinanceAdapte, MockNotify);
-	var testDataTemplate = {
-		RDNETH:0.00674780,
-		QSPETH:0.00062312,
-		REQETH:0.00082954
-	};
+	function it1() {
+		testRes = ['RDN'];
 
-	// fitst test
-	var testData = [testDataTemplate];
-	testData.push( {
-		RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 1),
-		QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent - 1) ,
-		REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent)
-	} )
-	testData.push( {
-		RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent + 1),
-		QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent - 1),
-		REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent)
-	} )
+		var filtersList = [
+			Filters.currency({mainSymb}),
+			Filters.priceHistory({percent:3, numberObservTicks}),
+			Filters.daylyPrice()
+		]
+		manager = new Manager({API: BinanceAdapte, communication: MockNotify, filtersList});
 
-	callForData(testData);
+		BinanceAdapte.getDaylyPrice = function(symb) {
+			return testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 1)
+		}
 
-	// second test
-	lastPrices = [];
-	testRes = [];
-	testData = [testDataTemplate];
-	testData.push( {
-		RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent ),
-		QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent - 1) ,
-		REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent)
-	} )
-	testData.push( {
-		RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent ),
-		QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent - 1),
-		REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent)
-	} )
+		// fitst test
+		var testData = [testDataTemplate];
+		testData.push( {
+			RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 1),
+			QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent - 1) ,
+			REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent)
+		} )
+		testData.push( {
+			RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent + 1),
+			QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent - 1),
+			REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent)
+		} )
 
-	callForData(testData);
-	console.log('test pass');
+		callForData(testData);
+	}
+	it1();
 
-	// third test
-	lastPrices = [];
-	testRes = ['REQ'];
-	testData = [testDataTemplate];
-	testData.push( {
-		RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent),
-		QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent + 1) ,
-		REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent + 0.5)
-	} )
-	testData.push( {
-		RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent - 0.5),
-		QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent - 0.5),
-		REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent +0.5)
-	} )
+	function it2() {
+		testRes = ['RDN'];
 
-	callForData(testData);
+		var filtersList = [
+			Filters.currency({mainSymb}),
+			Filters.daylyPrice(),
+			Filters.priceHistory({percent:3, numberObservTicks})
+		]
+		manager = new Manager({API: BinanceAdapte, communication: MockNotify, filtersList});
 
-	// 4 test
-	lastPrices = [];
-	testRes = ['QSP'];
-	testData = [testDataTemplate];
-	testData.push( {
-		RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 5),
-		QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent + 5) ,
-		REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent + 0.5)
-	} )
-	testData.push( {
-		RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent - 0.1),
-		QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent + 0.1),
-		REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent - 0.5)
-	} )
+		BinanceAdapte.getDaylyPrice = function(symb) {
+			return testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 1)
+		}
 
-	callForData(testData);
+		// fitst test
+		var testData = [testDataTemplate];
+		testData.push( {
+			RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 1),
+			QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent - 1) ,
+			REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent)
+		} )
+		testData.push( {
+			RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent + 1),
+			QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent - 1),
+			REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent)
+		} )
+
+		callForData(testData);
+	}
+	it2();
+
+	function it3() {
+		lastPrices = [];
+		testRes = [];
+		testData = [testDataTemplate];
+
+		var filtersList = [
+			Filters.currency({mainSymb}),
+			Filters.priceHistory({percent:3, numberObservTicks}),
+			Filters.daylyPrice()
+		]
+
+		manager = new Manager({API: BinanceAdapte, communication: MockNotify, filtersList});
+		testData.push( {
+			RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent ),
+			QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent - 1) ,
+			REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent)
+		} )
+		testData.push( {
+			RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent ),
+			QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent - 1),
+			REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent)
+		} )
+
+		callForData(testData);
+		console.log('test pass');
+	}
+	it3();
+
+
+	function it4() {
+		lastPrices = [];
+		testRes = ['REQ'];
+		testData = [testDataTemplate];
+		var filtersList = [
+			Filters.currency({mainSymb}),
+			Filters.priceHistory({percent:3, numberObservTicks}),
+			Filters.daylyPrice()
+		]
+		BinanceAdapte.getDaylyPrice = function(symb) {
+			return testDataTemplate.REQETH - (testDataTemplate.REQETH / 100) * (percent + 1)
+		}
+
+		manager = new Manager({API: BinanceAdapte, communication: MockNotify, filtersList});
+		testData.push( {
+			RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent),
+			QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent + 1) ,
+			REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent + 0.5)
+		} )
+		testData.push( {
+			RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent - 0.5),
+			QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent - 0.5),
+			REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent +0.5)
+		} )
+		callForData(testData);
+	}
+	it4();
+
+	function it5() {
+		lastPrices = [];
+		testRes = ['QSP'];
+		testData = [testDataTemplate];
+		var filtersList = [
+			Filters.currency({mainSymb}),
+			Filters.priceHistory({percent:3, numberObservTicks}),
+			Filters.daylyPrice()
+		]
+		BinanceAdapte.getDaylyPrice = function(symb) {
+			return testDataTemplate.QSPETH - (testDataTemplate.QSPETH / 100) * (percent + 1)
+		}
+
+		manager = new Manager({API: BinanceAdapte, communication: MockNotify, filtersList});
+		testData.push( {
+			RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 5),
+			QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent + 5) ,
+			REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent + 0.5)
+		} )
+		testData.push( {
+			RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent - 0.1),
+			QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent + 0.1),
+			REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent - 0.5)
+		} )
+
+		callForData(testData);
+	}
+	it5();
+
+	function it6() {
+		lastPrices = [];
+		testRes = ['RDN'];
+		testData = [testDataTemplate];
+		var filtersList = [
+			Filters.currency({mainSymb}),
+			Filters.priceHistory({percent:3, numberObservTicks}),
+			Filters.daylyPrice(),
+		]
+		BinanceAdapte.getDaylyPrice = function(symb) {
+			return testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 5)
+		}
+
+		manager = new Manager({API: BinanceAdapte, communication: MockNotify, filtersList});
+		testData.push( {
+			RDNETH: testDataTemplate.RDNETH + (testDataTemplate.RDNETH / 100) * (percent + 5),
+			QSPETH: testDataTemplate.QSPETH + (testDataTemplate.QSPETH / 100) * (percent + 5) ,
+			REQETH: testDataTemplate.REQETH + (testDataTemplate.REQETH / 100) * (percent + 0.5)
+		} )
+		testData.push( {
+			RDNETH: testData[1].RDNETH + (testData[1].RDNETH / 100) * (percent + 5),
+			QSPETH: testData[1].QSPETH + (testData[1].QSPETH / 100) * (percent + 0.1),
+			REQETH: testData[1].REQETH + (testData[1].REQETH / 100) * (percent - 0.5)
+		} )
+
+		callForData(testData);
+	}
+	it6();
 }
 //test();
 
